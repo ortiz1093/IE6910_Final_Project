@@ -10,13 +10,17 @@ import numpy as np
 from sklearn.linear_model import Lasso
 import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
 
+seed = 42
+np.random.seed(seed)
+tf.random.set_seed(seed)
 
 #%% Function definitions
 
 # Use Lasso to prune unnecessary variables
 def lassoPrune(X,y,alpha):
-	lasso = Lasso(alpha=alpha,normalize=True,random_state=42,positive=True)
+	lasso = Lasso(alpha=alpha,normalize=True,random_state=42)
 	lasso.fit(X,y)
 
 	delIdx = np.argwhere(lasso.coef_==0)
@@ -66,22 +70,32 @@ def createNN(Inputs, Outputs, Layers, Nodes, Activations):
 
 # Split data and standardize train/test data separately
 def splitScaleData(Data,test_pct):
-	split_idx = int(np.floor((1-test_pct) * len(Data)))
-	X_train,X_test,y_train,y_test = Data.iloc[:split_idx,0:-1], \
-						  Data.iloc[split_idx:,0:-1], \
-						  Data.iloc[:split_idx,-1], \
-						  Data.iloc[split_idx:,-1]
 
-	y_train = y_train.to_numpy().reshape(-1,1)
-	y_test = y_test.to_numpy().reshape(-1,1)
 
 	scaler = StandardScaler()
-	X_train = scaler.fit_transform(X_train)
-	X_test = scaler.fit_transform(X_test)
-	y_train = scaler.fit_transform(y_train)
-	y_test = scaler.fit_transform(y_test)
 
-	return X_train,X_test,y_train,y_test,scaler
+	if test_pct * len(Data) > 0:
+		split_idx = int(np.floor((1-test_pct) * len(Data)))
+		X_train,X_test,y_train,y_test = Data.iloc[:split_idx,0:-1], \
+							  Data.iloc[split_idx:,0:-1], \
+							  Data.iloc[:split_idx,-1], \
+							  Data.iloc[split_idx:,-1]
+
+		y_train = y_train.to_numpy().reshape(-1,1)
+		y_test = y_test.to_numpy().reshape(-1,1)
+
+		X_train = scaler.fit_transform(X_train)
+		X_test = scaler.fit_transform(X_test)
+		y_train = scaler.fit_transform(y_train)
+		y_test = scaler.fit_transform(y_test)
+
+		return X_train,X_test,y_train,y_test,scaler
+	else:
+		X,y = Data.iloc[:,0:-1], Data.iloc[:,-1].to_numpy().reshape(-1,1)
+		X = scaler.fit_transform(X)
+		y = scaler.fit_transform(y)
+
+		return X,y
 
 # Tabulate performance information
 def performanceTable(y_test,y_pred,model,scaler):
@@ -129,23 +143,95 @@ FS.columns = newCols
 AM.columns = newCols
 
 
-#%% Perform variable selection and combine variables and targets
+#%% Check sensitivity and choose best Lasso alpha fro variable pruning
+
 X = FS
 y = MV.iloc[:,-1]
 
-Data = lassoPrune(X,y,4)
+alphas = 2.0**np.arange(-9,3)
+varSelPerf = []
+for alpha in alphas:
+	Data = lassoPrune(X,y,alpha)
+	scaledX,scaledY = splitScaleData(Data,0)
+	numVars = scaledX.shape[1]
+	numSamp = scaledY.shape[0]
 
-numVars = Data.shape[1]-1
-numSamp = Data.shape[0]
+	model = createNN(numVars,numSamp,20,100,'elu')
+	model.fit(scaledX,scaledY,epochs=20,batch_size=2**2,verbose=0)
+
+	varSelPerf.append(model.history.history['loss'][-1])
+
+best_alpha_idx = np.argmin(varSelPerf)
+best_alpha = alphas[best_alpha_idx]
+
+fig,ax = plt.subplots()
+ax.semilogx(alphas,varSelPerf,basex=2)
+
+figManager = plt.get_current_fig_manager()
+figManager.window.showMaximized()
 
 
-#%% Split data and scale
+#%% Check sensitivity and choose best network architecture
 
+#X = FS
+#y = MV.iloc[:,-1]
+#
+#Data = lassoPrune(X,y,alpha)
+#scaledX,scaledY = splitScaleData(Data,0)
+#numVars = scaledX.shape[1]
+#numSamp = scaledY.shape[0]
+#
+#Layers = np.random.randint(2,50,50)
+#Nodes = np.random.randint(10,100,50)
+#
+#arch_perf = []
+#
+#for i in range(len(Layers)):
+#
+#	model = createNN(numVars,numSamp,Layers[i],Nodes[i],'elu')
+#	model.fit(scaledX,scaledY,epochs=20,batch_size=2**2,verbose=0)
+#
+#	arch_perf.append(model.history.history['loss'][-1])
+#
+#best_arch_idx = np.argmin(arch_perf)
+#best_arch = (Layers[best_arch_idx],Nodes[best_arch_idx])
+#
+#
+## Display architecture performance
+#plt.close(fig='all')
+#
+#arch_sz = [(i**3)*3000 for i in arch_perf]
+#fig,ax = plt.subplots()
+#plt.xticks(np.arange(2, max(num_layers)+1, 2.0))
+#color = [1/i for i in arch_perf]
+#ax.scatter(num_layers,num_nodes,s=arch_sz,c=color,cmap='viridis')
+#ax.set_title("Model Architecutres \n\n Annotation: Accuracy, (Layers x Nodes)")
+#ax.set_xlabel("Number of Layers")
+#ax.set_ylabel("Number of Nodes per Layer")
+#
+#
+#figManager = plt.get_current_fig_manager()
+#figManager.window.showMaximized()
+#
+#for i,perf in enumerate(arch_perf):
+#	offset = perf*0.55
+#	ptX = num_layers[i]+offset
+#	ptY = num_nodes[i]+offset
+#	txt = str(np.round(perf,3)) + ", (" + str(num_layers[i]) + " x " \
+#		+ str(num_nodes[i]) + ")"
+#	ax.annotate(txt,(ptX,ptY),size='medium')
+
+#%% Train and Evaluate model
+
+
+# Split data and scale
 test_pct = 0.25
 
 X_train,X_test,y_train,y_test,scaler = splitScaleData(Data,test_pct)
 
-#%% Train and Evaluate model
+
+numVars = Data.shape[1]-1
+numSamp = Data.shape[0]
 
 print("\nTraining:")
 model = createNN(numVars,numSamp,20,100,'elu')
