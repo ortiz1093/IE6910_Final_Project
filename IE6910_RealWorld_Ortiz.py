@@ -5,6 +5,7 @@ Thu Apr 30 02:12:18 2020
 Joshua Ortiz
 """
 
+from warnings import filterwarnings
 from time import time
 import pandas as pd
 import numpy as np
@@ -15,6 +16,11 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from numpy.random import randint
 from numpy.random import rand
+#import smogn
+#from imblearn.over_sampling import SMOTE
+#from imblearn.over_sampling import ADASYN
+
+filterwarnings("ignore",category=DeprecationWarning)
 
 prg_t0 = time()
 seed = 42
@@ -25,7 +31,7 @@ tf.random.set_seed(seed)
 
 # Use Lasso to prune unnecessary variables
 def lassoPrune(X,y,alpha):
-	lasso = Lasso(alpha=alpha,normalize=False,random_state=42)
+	lasso = Lasso(alpha=alpha,normalize=True,random_state=42)
 	lasso.fit(X,y)
 
 	delIdx = np.argwhere(lasso.coef_==0)
@@ -83,19 +89,24 @@ def arrayScaler(arr):
 	return [(val-arrMin)/(interval) for val in arr]
 
 # Run entire optimization routine to choose best model for data
-def OptimizeNN(Data):
+def OptimizeNN(Data,model_name=""):
+	# Track optimizer time
+	opt_t0 = time()
 
+	# Scale data
+	RawData = Data.copy()
 	cols = Data.columns
 	scaler = MinMaxScaler()
 	Data = pd.DataFrame(scaler.fit_transform(Data))
 	Data.columns = cols
 
 	#################### Lasso Variable Selection ##########################
+	print("Using Lasso Regression to Reduce Dimensionality")
 	test_pct = 0.2
 	X,y = Data.iloc[:,:-1],Data.iloc[:,-1]
 	X_train,X_test,y_train,y_test = train_test_split(X,y,test_size=test_pct)
 
-	alphas = np.arange(0.01,0.15,step=0.01)
+	alphas = 2.0**np.arange(-10,2)
 	scores = []
 
 	for alpha in alphas:
@@ -104,19 +115,29 @@ def OptimizeNN(Data):
 
 		scores.append(lasso.score(X_test,y_test))
 
+
 	best_idx = np.argmax(scores)
 	best_alpha = alphas[best_idx]
 
 	fig,ax = plt.subplots()
 	ax.semilogx(alphas,scores,basex=2)
+	ax.set_title("Lasso Alpha Sensitvity\n" + model_name)
+	ax.set_xlabel("Alpha Values")
+	ax.set_ylabel("Percent Error")
 	plt.show()
 
-	X = FS
-	y = MV.iloc[:,-1]
+	X,y = RawData.iloc[:,:-1],RawData.iloc[:,-1]
+#	X = FS
+#	y = MV.iloc[:,-1]
 
 	Data = lassoPrune(X,y,best_alpha)
 
+	print("\tBest alpha value: %0.4g" % best_alpha)
+	print("\tColumns selected:\n")
+	for col in Data.columns: print("\t\t" + col)
+
 	#################### Architecture Selection ##########################
+	print("\n\nUsing Random Search to Choose Model Architecture")
 	X,y = Data.iloc[:,:-1],Data.iloc[:,-1]
 
 	numVars = X.shape[1]
@@ -135,18 +156,19 @@ def OptimizeNN(Data):
 
 		arch_perf.append(model.history.history['mape'][-1])
 
-	best_arch_idx = np.argmin(arch_perf)
+	best_arch_idx = np.argmin(np.square(arch_perf))
 	best_arch = (num_layers[best_arch_idx],num_nodes[best_arch_idx])
 
 
 	# Plot architecture performance
-	arch_sz = [i for i in arch_perf]
+	arch_sz = [i**1.5 for i in arch_perf]
 	#arch_sz = [(i**3)*3000 for i in arch_perf]
 	fig,ax = plt.subplots()
 	plt.xticks(np.arange(2, max(num_layers)+1, 2.0))
 	color = [1/i for i in arch_perf]
 	ax.scatter(num_layers,num_nodes,s=arch_sz,c=color,cmap='viridis')
-	ax.set_title("Model Architecutres \n\n Annotation: Accuracy, (Layers x Nodes)")
+	ax.set_title("Model Architecutres\n" + model_name \
+			  + "\n\nAnnotation: Percent Error, (Layers x Nodes)")
 	ax.set_xlabel("Number of Layers")
 	ax.set_ylabel("Number of Nodes per Layer")
 
@@ -163,7 +185,12 @@ def OptimizeNN(Data):
 			+ str(num_nodes[i]) + ")"
 		ax.annotate(txt,(ptX,ptY),size='medium')
 
+	print("\tBest architecture found:")
+	print("\t\tNumber of Layers: " + str(best_arch[0]))
+	print("\t\tNumber of Nodes per Layer: " + str(best_arch[1]))
+
 	#################### Activation Selection ##########################
+	print("\n\nUsing Exhaustive Search to Choose Activation Function")
 
 	# Specifiy certain activation functions to test
 	activations = ['relu','elu','tanh','sigmoid', 'linear', 'exponential']
@@ -180,14 +207,14 @@ def OptimizeNN(Data):
 
 		act_perf.append(model.history.history['mape'][-1])
 
-	best_activation = np.nanargmin(act_perf)
+	best_activation = np.nanargmin(np.square(act_perf))
 	best_act = activations[best_activation]
 
 	fig,ax = plt.subplots()
 	ax.bar(activations,act_perf)
-	ax.set_ylabel('Accuracy Score',size='x-large')
+	ax.set_ylabel('Percent Error',size='x-large')
 
-	ax.set_title('Accuracy by Activation Function',size='x-large')
+	ax.set_title('Activation Function\n' + model_name,size='x-large')
 	ax.set_xticks(np.arange(len(activations)))
 	ax.set_xticklabels(activations, rotation = 45,size='x-large')
 	ax.set_yticks(np.arange(0, 1.1, 0.1))
@@ -200,7 +227,11 @@ def OptimizeNN(Data):
 	figManager = plt.get_current_fig_manager()
 	figManager.window.showMaximized()
 
+	print("\tBest activation found:\t" + best_act)
+
 	#################### Batch Size Selection ##########################
+	print("\n\nSearching Powers of 2 to Choose Batch Size")
+
 	# Test batch sizes in powers of 2, (e.g. 2, 4, 8, 16, etc.)
 	batch_sizes = 2**np.array(range(2,9))
 
@@ -218,12 +249,12 @@ def OptimizeNN(Data):
 		batch_perf.append(model.history.history['mape'][-1])
 		batch_times.append(m_f)
 
-	scaled_batch_perf = arrayScaler(batch_perf)
+	scaled_batch_perf = arrayScaler(np.abs(batch_perf))
 	scaled_batch_times = arrayScaler(batch_times)
-	batch_diff = []
+	batch_sum = []
 	for i in range(len(batch_sizes)):
-		batch_diff.append(scaled_batch_perf[i] - scaled_batch_times[i])
-	best_batch = np.argmax(batch_diff)
+		batch_sum.append(scaled_batch_perf[i] + scaled_batch_times[i])
+	best_batch = np.argmin(batch_sum)
 	batch_sz = batch_sizes[best_batch]
 
 
@@ -232,10 +263,10 @@ def OptimizeNN(Data):
 
 	color = 'tab:red'
 	ax1.semilogx(batch_sizes, batch_perf, basex=2)
-	ax1.set_title('Batch Size Performance',size='x-large')
+	ax1.set_title('Batch Size Performance\n' + model_name,size='x-large')
 	ax1.set_xlabel('Batch Size',size='x-large')
 	ax1.set_xticks(batch_sizes)
-	ax1.set_ylabel('Accuracy Score', color=color,size='x-large')
+	ax1.set_ylabel('Percent Error', color=color,size='x-large')
 	ax1.plot(batch_sizes, batch_perf, color=color)
 	ax1.tick_params(axis='y', labelcolor=color)
 
@@ -251,7 +282,10 @@ def OptimizeNN(Data):
 	figManager = plt.get_current_fig_manager()
 	figManager.window.showMaximized()
 
+	print("\tBest batch size found:\t" + str(batch_sz))
+
 	#################### Epoch Quantity Selection ##########################
+	print("\n\nSearching Powers of 2 to Choose Epoch Quantity")
 
 	# Same process again
 	epochs = 2**np.array(range(2,9))
@@ -282,10 +316,10 @@ def OptimizeNN(Data):
 
 	color = 'tab:red'
 	ax1.semilogx(epochs, epoch_perf, basex=2)
-	ax1.set_title('Epoch Performance',size='xx-large')
+	ax1.set_title('Epoch Performance\n' + model_name,size='xx-large')
 	ax1.set_xlabel('Epochs',size='x-large')
 	ax1.set_xticks(batch_sizes)
-	ax1.set_ylabel('Accuracy Score', color=color,size='x-large')
+	ax1.set_ylabel('Percent Error', color=color,size='x-large')
 	ax1.plot(epochs, epoch_perf, color=color)
 	ax1.tick_params(axis='y', labelcolor=color)
 
@@ -301,7 +335,13 @@ def OptimizeNN(Data):
 	figManager = plt.get_current_fig_manager()
 	figManager.window.showMaximized()
 
+	print("\tBest epoch quantity found:\t" + str(epoch_sz))
+
+
 	#################### 5-Fold Validation ##########################
+
+	print("Using 5-fold cross validation to assess final model performance")
+	print("Dataset augmentation: " + model_name)
 
 	model = createNN(numVars,numSamp,int(best_arch[0]),
 				     int(best_arch[1]),best_act)
@@ -312,11 +352,8 @@ def OptimizeNN(Data):
 	sz = int(np.floor(len(Data)/K))
 	for fold in range(K):
 		TestRows = Data.index[sz*fold+np.arange(sz)]
-		print(TestRows)
 		foldTrain = Data.drop(TestRows)
 		foldTest = Data.loc[TestRows]
-		print(foldTrain)
-		print(foldTest)
 
 		foldX_train,foldY_train = foldTrain.iloc[:,:-1],foldTrain.iloc[:,-1]
 		foldX_test,foldY_test = foldTest.iloc[:,:-1],foldTest.iloc[:,-1]
@@ -327,7 +364,7 @@ def OptimizeNN(Data):
 		MAPEs.append(foldMape)
 
 	MAPEscore = np.mean(np.array(MAPEs))
-	print("Average mean absolute percent error from K-fold cross val: " \
+	print("\tAverage mean absolute percent error from K-fold cross val: " \
 		+ str(MAPEscore))
 
 	SampleValData = Data.sample(5)
@@ -336,14 +373,9 @@ def OptimizeNN(Data):
 
 
 	y_diff = 100*(predY.flatten()-valY)/valY
-#	Performance = pd.DataFrame(
-#				{'Actual':valY.to_numpy(),'Predicted': predY.flatten(), \
-#			       'Pct Diff':y_diff.to_numpy()},
-#			       index=np.arange(len(valY))
-#				 )
 
-	prg_tf = time() - prg_t0
-	print("Program ran in %0.3gs" % prg_tf)
+	opt_tf = time() - opt_t0
+	print("\n\nOptimizer ran in %0.5gs" % opt_tf)
 
 	return valY.to_numpy(),predY.flatten(),y_diff.to_numpy()
 
@@ -373,20 +405,19 @@ newCols = ['Sz_Dim_Els', 'Sz_Dim_Rel', 'Sz_Con_DOF',
 FS.columns = newCols
 
 
-#%% Check sensitivity and choose best Lasso alpha for variable pruning
+#%% Create primary dataframe
 
 Data = pd.merge(FS, MV.iloc[:,-1], left_index=True, right_index=True)
 
 
 #%% No augmentation
 
-valY,predY,y_diff = OptimizeNN(Data)
+valY,predY,y_diff = OptimizeNN(Data,"No Augmentation")
 Performance = pd.DataFrame(
-				{'Actual':valY,'Predicted': predY, \
-			       'Pct Diff':y_diff},
+				{'Actual':valY,'NoAug_pred': predY, \
+			       'NoAug_diff':y_diff},
 			       index=np.arange(len(valY))
 				 )
-
 
 #%% Random perturbation oversampling
 
@@ -419,11 +450,27 @@ for i in range(10):
 #Performance['Pert Pred'] = pertY
 #Performance['Pert Diff'] = pertDiff
 
-valY,predY,y_diff = OptimizeNN(Data)
-Performance = pd.DataFrame(
-				{'Actual':valY,'Predicted': predY, \
-			       'Pct Diff':y_diff},
-			       index=np.arange(len(valY))
-				 )
+valY,predY,y_diff = OptimizeNN(Data_pert)
+Performance['RandNoise_pred'] = predY
+Performance['RandNoise_diff'] = y_diff
 
-#%% SMOTE Oversampling
+
+#%% Gaussian Noise oversampling  (normally distributed perturbations)
+
+clean_signal = Data.copy()
+Data_noise = clean_signal.copy()
+
+for i in range(5):
+	mu, sigma = 0, 0.1
+	noise = np.random.normal(mu, sigma, Data.shape)
+	noisy_signal = clean_signal + noise
+
+	Data_noise = Data_noise.append(noisy_signal,ignore_index=True)
+
+valY,predY,y_diff = OptimizeNN(Data_noise)
+Performance['GuasNoise_pred'] = predY
+Performance['GuasNoise_diff'] = y_diff
+
+#%% End time
+prg_tf = time() - prg_t0
+print("Program ran in %0.5gs" % prg_tf)
