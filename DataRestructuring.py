@@ -4,7 +4,7 @@
 Mon Apr 27 16:16:01 2020
 Joshua Ortiz
 """
-
+from time import time
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import Lasso
@@ -12,6 +12,7 @@ import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
+prg_t0 = time()
 seed = 42
 np.random.seed(seed)
 tf.random.set_seed(seed)
@@ -143,11 +144,12 @@ FS.columns = newCols
 AM.columns = newCols
 
 
-#%% Check sensitivity and choose best Lasso alpha fro variable pruning
+#%% Check sensitivity and choose best Lasso alpha for variable pruning
 
 X = FS
 y = MV.iloc[:,-1]
 
+#alphas = np.arange(0,0.6,step=0.01)
 alphas = 2.0**np.arange(-9,3)
 varSelPerf = []
 for alpha in alphas:
@@ -156,7 +158,7 @@ for alpha in alphas:
 	numVars = scaledX.shape[1]
 	numSamp = scaledY.shape[0]
 
-	model = createNN(numVars,numSamp,20,100,'elu')
+	model = createNN(numVars,numSamp,12,45,'relu')
 	model.fit(scaledX,scaledY,epochs=20,batch_size=2**2,verbose=0)
 
 	varSelPerf.append(model.history.history['loss'][-1])
@@ -164,8 +166,13 @@ for alpha in alphas:
 best_alpha_idx = np.argmin(varSelPerf)
 best_alpha = alphas[best_alpha_idx]
 
+
+# Plot alpha sensitivity
+plt.close(fig='all')
+
 fig,ax = plt.subplots()
-ax.semilogx(alphas,varSelPerf,basex=2)
+#ax.semilogx(alphas,varSelPerf,basex=2)
+ax.plot(alphas,varSelPerf)
 
 figManager = plt.get_current_fig_manager()
 figManager.window.showMaximized()
@@ -173,53 +180,53 @@ figManager.window.showMaximized()
 
 #%% Check sensitivity and choose best network architecture
 
-#X = FS
-#y = MV.iloc[:,-1]
-#
-#Data = lassoPrune(X,y,alpha)
-#scaledX,scaledY = splitScaleData(Data,0)
-#numVars = scaledX.shape[1]
-#numSamp = scaledY.shape[0]
-#
-#Layers = np.random.randint(2,50,50)
-#Nodes = np.random.randint(10,100,50)
-#
-#arch_perf = []
-#
-#for i in range(len(Layers)):
-#
-#	model = createNN(numVars,numSamp,Layers[i],Nodes[i],'elu')
-#	model.fit(scaledX,scaledY,epochs=20,batch_size=2**2,verbose=0)
-#
-#	arch_perf.append(model.history.history['loss'][-1])
-#
-#best_arch_idx = np.argmin(arch_perf)
-#best_arch = (Layers[best_arch_idx],Nodes[best_arch_idx])
-#
-#
-## Display architecture performance
-#plt.close(fig='all')
-#
-#arch_sz = [(i**3)*3000 for i in arch_perf]
-#fig,ax = plt.subplots()
-#plt.xticks(np.arange(2, max(num_layers)+1, 2.0))
-#color = [1/i for i in arch_perf]
-#ax.scatter(num_layers,num_nodes,s=arch_sz,c=color,cmap='viridis')
-#ax.set_title("Model Architecutres \n\n Annotation: Accuracy, (Layers x Nodes)")
-#ax.set_xlabel("Number of Layers")
-#ax.set_ylabel("Number of Nodes per Layer")
-#
-#
-#figManager = plt.get_current_fig_manager()
-#figManager.window.showMaximized()
-#
-#for i,perf in enumerate(arch_perf):
-#	offset = perf*0.55
-#	ptX = num_layers[i]+offset
-#	ptY = num_nodes[i]+offset
-#	txt = str(np.round(perf,3)) + ", (" + str(num_layers[i]) + " x " \
-#		+ str(num_nodes[i]) + ")"
-#	ax.annotate(txt,(ptX,ptY),size='medium')
+X = FS
+y = MV.iloc[:,-1]
+
+Data = lassoPrune(X,y,best_alpha)
+scaledX,scaledY = splitScaleData(Data,0)
+numVars = scaledX.shape[1]
+numSamp = scaledY.shape[0]
+
+num_layers = np.append(np.random.randint(2,50,49),20)
+num_nodes = np.append(np.random.randint(10,100,49),100)
+
+arch_perf = []
+
+for i in range(len(num_layers)):
+
+	model = createNN(numVars,numSamp,int(num_layers[i]),
+			     int(num_nodes[i]),'elu')
+	model.fit(scaledX,scaledY,epochs=20,batch_size=2**2,verbose=0)
+
+	arch_perf.append(model.history.history['loss'][-1])
+
+best_arch_idx = np.argmin(arch_perf)
+best_arch = (num_layers[best_arch_idx],num_nodes[best_arch_idx])
+
+
+# Plot architecture performance
+
+arch_sz = [(i**3)*3000 for i in arch_perf]
+fig,ax = plt.subplots()
+plt.xticks(np.arange(2, max(num_layers)+1, 2.0))
+color = [1/i for i in arch_perf]
+ax.scatter(num_layers,num_nodes,s=arch_sz,c=color,cmap='viridis')
+ax.set_title("Model Architecutres \n\n Annotation: Accuracy, (Layers x Nodes)")
+ax.set_xlabel("Number of Layers")
+ax.set_ylabel("Number of Nodes per Layer")
+
+
+figManager = plt.get_current_fig_manager()
+figManager.window.showMaximized()
+
+for i,perf in enumerate(arch_perf):
+	offset = perf*0.55
+	ptX = num_layers[i]+offset
+	ptY = num_nodes[i]+offset
+	txt = str(np.round(perf,3)) + ", (" + str(num_layers[i]) + " x " \
+		+ str(num_nodes[i]) + ")"
+	ax.annotate(txt,(ptX,ptY),size='medium')
 
 #%% Train and Evaluate model
 
